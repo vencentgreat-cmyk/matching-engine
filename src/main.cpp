@@ -5,17 +5,13 @@
 #include <chrono>
 #include <thread>
 #include <atomic>
+#include <cfloat>
 #include "OrderBook.h"
 #include "ThreadSafeQueue.h"
+#include "SessionStats.h"
 
 // ---- 共享状态 ----
 std::atomic<int> nextId{1};
-std::atomic<int> totalTrades{0};
-
-struct MatchResult {
-    Order order;
-    std::vector<Trade> trades;
-};
 
 // ---- 输出函数 ----
 void printTrades(const std::vector<Trade>& trades) {
@@ -29,18 +25,24 @@ void printTrades(const std::vector<Trade>& trades) {
 
 void printHelp() {
     std::cout << "\nCommands:\n"
-              << "  BUY <symbol> <qty> <price>    Place a buy order\n"
-              << "  SELL <symbol> <qty> <price>    Place a sell order\n"
-              << "  CANCEL <order_id>              Cancel an order\n"
-              << "  BOOK [symbol]                  Show order book (all or one symbol)\n"
-              << "  SIM <symbol> <count>           Simulate random orders (single-threaded)\n"
-              << "  MSIM <symbol> <count>          Multi-threaded simulation\n"
-              << "  HELP                           Show this message\n"
-              << "  QUIT                           Exit\n" << std::endl;
+              << "  BUY <symbol> <qty> <price>     Place a limit buy order\n"
+              << "  SELL <symbol> <qty> <price>     Place a limit sell order\n"
+              << "  MARKET BUY <symbol> <qty>       Market buy (best available price)\n"
+              << "  MARKET SELL <symbol> <qty>       Market sell (best available price)\n"
+              << "  CANCEL <order_id>               Cancel an order\n"
+              << "  BOOK [symbol]                   Show order book\n"
+              << "  OPEN                            Open trading session\n"
+              << "  CLOSE                           Close session and show summary\n"
+              << "  STATS [symbol]                  Show current session stats\n"
+              << "  SIM <symbol> <count>            Single-threaded simulation\n"
+              << "  MSIM <symbol> <count>           Multi-threaded simulation\n"
+              << "  HELP                            Show this message\n"
+              << "  QUIT                            Exit\n" << std::endl;
 }
 
-// ---- 单线程模拟（保留原版） ----
+// ---- 单线程模拟 ----
 void runSimulation(std::map<std::string, OrderBook>& books,
+                   SessionStats& session, bool sessionOpen,
                    const std::string& symbol, int count) {
     std::mt19937 rng(42);
     std::uniform_int_distribution<int> sideDist(0, 1);
@@ -67,6 +69,12 @@ void runSimulation(std::map<std::string, OrderBook>& books,
 
         totalLatencyUs += std::chrono::duration<double, std::micro>(t2 - t1).count();
         trades += result.size();
+
+        if (sessionOpen) {
+            for (const auto& t : result) {
+                session.recordTrade(t.symbol, t.price, t.quantity);
+            }
+        }
     }
 
     auto endAll = std::chrono::steady_clock::now();
@@ -88,13 +96,15 @@ void matchingThread(ThreadSafeQueue<Order>& queue,
                     OrderBook& book,
                     std::atomic<int>& tradeCount,
                     double& totalLatencyUs,
-                    int& processedCount) {
+                    int& processedCount,
+                    SessionStats& session,
+                    bool sessionOpen) {
     totalLatencyUs = 0.0;
     processedCount = 0;
 
     while (true) {
         auto maybeOrder = queue.pop();
-        if (!maybeOrder.has_value()) break;  // 队列已停止且为空
+        if (!maybeOrder.has_value()) break;
 
         Order order = std::move(maybeOrder.value());
 
@@ -105,10 +115,17 @@ void matchingThread(ThreadSafeQueue<Order>& queue,
         totalLatencyUs += std::chrono::duration<double, std::micro>(t2 - t1).count();
         tradeCount += trades.size();
         processedCount++;
+
+        if (sessionOpen) {
+            for (const auto& t : trades) {
+                session.recordTrade(t.symbol, t.price, t.quantity);
+            }
+        }
     }
 }
 
-void runMultiThreadSim(const std::string& symbol, int count) {
+void runMultiThreadSim(const std::string& symbol, int count,
+                       SessionStats& session, bool sessionOpen) {
     ThreadSafeQueue<Order> queue;
     OrderBook book;
     std::atomic<int> tradeCount{0};
@@ -117,15 +134,12 @@ void runMultiThreadSim(const std::string& symbol, int count) {
 
     auto startAll = std::chrono::steady_clock::now();
 
-    // 启动撮合线程
     std::thread matcher(matchingThread,
-                        std::ref(queue),
-                        std::ref(book),
-                        std::ref(tradeCount),
-                        std::ref(matchLatencyUs),
-                        std::ref(processedCount));
+                        std::ref(queue), std::ref(book),
+                        std::ref(tradeCount), std::ref(matchLatencyUs),
+                        std::ref(processedCount),
+                        std::ref(session), sessionOpen);
 
-    // 当前线程作为 ingestion 线程，生成订单并推入队列
     std::mt19937 rng(42);
     std::uniform_int_distribution<int> sideDist(0, 1);
     std::uniform_int_distribution<int> qtyDist(10, 200);
@@ -138,14 +152,10 @@ void runMultiThreadSim(const std::string& symbol, int count) {
 
         Order order{nextId++, side, symbol, qty, price,
                     std::chrono::steady_clock::now()};
-
         queue.push(std::move(order));
     }
 
-    // 通知撮合线程：没有更多订单了
     queue.stop();
-
-    // 等待撮合线程完成
     matcher.join();
 
     auto endAll = std::chrono::steady_clock::now();
@@ -166,6 +176,8 @@ void runMultiThreadSim(const std::string& symbol, int count) {
 // ---- 主循环 ----
 int main() {
     std::map<std::string, OrderBook> books;
+    SessionStats session;
+    bool sessionOpen = false;
     std::string line;
 
     std::cout << "=== Matching Engine ===" << std::endl;
@@ -182,7 +194,52 @@ int main() {
 
         for (auto& c : command) c = toupper(c);
 
-        if (command == "BUY" || command == "SELL") {
+        if (command == "MARKET") {
+            // MARKET BUY/SELL <symbol> <qty>
+            std::string side_str, symbol;
+            int qty;
+
+            if (!(iss >> side_str >> symbol >> qty)) {
+                std::cout << "Usage: MARKET BUY/SELL <symbol> <qty>" << std::endl;
+                continue;
+            }
+
+            for (auto& c : side_str) c = toupper(c);
+            for (auto& c : symbol) c = toupper(c);
+
+            if (side_str != "BUY" && side_str != "SELL") {
+                std::cout << "Usage: MARKET BUY/SELL <symbol> <qty>" << std::endl;
+                continue;
+            }
+
+            Side side = (side_str == "BUY") ? Side::BUY : Side::SELL;
+            // Market order: 买方出无穷大价，卖方要价为零
+            double price = (side == Side::BUY) ? 999999.99 : 0.01;
+
+            Order order{nextId++, side, symbol, qty, price,
+                        std::chrono::steady_clock::now()};
+
+            std::cout << "[MARKET ORDER] id=" << order.id << " "
+                      << side_str << " " << qty << " " << symbol << std::endl;
+
+            auto trades = books[symbol].addOrder(order);
+            printTrades(trades);
+
+            if (sessionOpen) {
+                for (const auto& t : trades) {
+                    session.recordTrade(t.symbol, t.price, t.quantity);
+                }
+            }
+
+            if (trades.empty()) {
+                std::cout << "[WARNING] No liquidity — order book is empty for "
+                          << symbol << std::endl;
+            } else if (order.quantity > 0) {
+                std::cout << "[PARTIAL] " << order.quantity
+                          << " unfilled (not enough liquidity)" << std::endl;
+            }
+
+        } else if (command == "BUY" || command == "SELL") {
             std::string symbol;
             int qty;
             double price;
@@ -205,6 +262,12 @@ int main() {
 
             auto trades = books[symbol].addOrder(order);
             printTrades(trades);
+
+            if (sessionOpen) {
+                for (const auto& t : trades) {
+                    session.recordTrade(t.symbol, t.price, t.quantity);
+                }
+            }
 
             if (order.quantity > 0 && !trades.empty()) {
                 std::cout << "[PARTIAL] " << order.quantity << " remaining on book" << std::endl;
@@ -250,6 +313,37 @@ int main() {
                 }
             }
 
+        } else if (command == "OPEN") {
+            if (sessionOpen) {
+                std::cout << "Session is already open. Use CLOSE to end it first." << std::endl;
+            } else {
+                session.reset();
+                sessionOpen = true;
+                std::cout << "[SESSION OPENED] Trading session started." << std::endl;
+            }
+
+        } else if (command == "CLOSE") {
+            if (!sessionOpen) {
+                std::cout << "No session is open. Use OPEN to start one." << std::endl;
+            } else {
+                sessionOpen = false;
+                std::cout << "\n[SESSION CLOSED]" << std::endl;
+                session.print();
+            }
+
+        } else if (command == "STATS") {
+            if (!sessionOpen) {
+                std::cout << "No session is open. Use OPEN to start one." << std::endl;
+            } else {
+                std::string symbol;
+                if (iss >> symbol) {
+                    for (auto& c : symbol) c = toupper(c);
+                    session.print(symbol);
+                } else {
+                    session.print();
+                }
+            }
+
         } else if (command == "SIM") {
             std::string symbol;
             int count;
@@ -262,7 +356,7 @@ int main() {
                 std::cout << "Count must be between 1 and 10,000,000" << std::endl;
                 continue;
             }
-            runSimulation(books, symbol, count);
+            runSimulation(books, session, sessionOpen, symbol, count);
 
         } else if (command == "MSIM") {
             std::string symbol;
@@ -276,12 +370,16 @@ int main() {
                 std::cout << "Count must be between 1 and 10,000,000" << std::endl;
                 continue;
             }
-            runMultiThreadSim(symbol, count);
+            runMultiThreadSim(symbol, count, session, sessionOpen);
 
         } else if (command == "HELP") {
             printHelp();
 
         } else if (command == "QUIT" || command == "EXIT") {
+            if (sessionOpen) {
+                std::cout << "\n[SESSION CLOSED]" << std::endl;
+                session.print();
+            }
             std::cout << "Shutting down." << std::endl;
             break;
 
