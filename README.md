@@ -11,7 +11,7 @@ A high-performance order matching engine written in C++17. Simulates the core of
 | 1,000,000 | 777,781 | 0.42 μs | 1.46M orders/sec |
 
 Sub-microsecond latency, stable throughput across three orders of magnitude.
-
+![Multi-client trading demo](docs/demo.png)
 ## Features
 
 - **Price-time priority matching** — highest bid and lowest ask matched first; ties broken by arrival time (FIFO)
