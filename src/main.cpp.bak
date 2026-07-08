@@ -49,63 +49,34 @@ void runSimulation(std::map<std::string, OrderBook>& books,
     std::uniform_int_distribution<int> sideDist(0, 1);
     std::uniform_int_distribution<int> qtyDist(10, 200);
     std::uniform_real_distribution<double> priceDist(140.0, 150.0);
-    std::uniform_int_distribution<int> opDist(0, 99);
 
     OrderBook& book = books[symbol];
     int trades = 0;
-    int cancels = 0;
-    int cancelHits = 0;
-
-    std::vector<int> liveIds;
-    liveIds.reserve(count);
 
     auto startAll = std::chrono::steady_clock::now();
     double totalLatencyUs = 0.0;
-    LatencyStats latency(count);
+    LatencyStats latency(count); 
 
     for (int i = 0; i < count; ++i) {
-        bool doCancel = (opDist(rng) < 25) && !liveIds.empty();
+        Side side = sideDist(rng) == 0 ? Side::BUY : Side::SELL;
+        double price = std::round(priceDist(rng) * 100.0) / 100.0;
+        int qty = qtyDist(rng);
 
-        if (doCancel) {
-            std::uniform_int_distribution<size_t> pickDist(0, liveIds.size() - 1);
-            size_t idx = pickDist(rng);
-            int targetId = liveIds[idx];
-            liveIds[idx] = liveIds.back();
-            liveIds.pop_back();
+        Order order{nextId++, side, symbol, qty, price,
+                    std::chrono::steady_clock::now()};
 
-            auto t1 = std::chrono::steady_clock::now();
-            bool ok = book.cancelOrder(targetId);
-            auto t2 = std::chrono::steady_clock::now();
+        auto t1 = std::chrono::steady_clock::now();
+        auto result = book.addOrder(order);
+        auto t2 = std::chrono::steady_clock::now();
 
-            double ns = std::chrono::duration<double, std::nano>(t2 - t1).count();
-            totalLatencyUs += ns / 1000.0;
-            latency.record(ns);
-            cancels++;
-            if (ok) cancelHits++;
-        } else {
-            Side side = sideDist(rng) == 0 ? Side::BUY : Side::SELL;
-            double price = std::round(priceDist(rng) * 100.0) / 100.0;
-            int qty = qtyDist(rng);
+        double ns = std::chrono::duration<double, std::nano>(t2 - t1).count();
+        totalLatencyUs += ns / 1000.0;   // 原来的平均还留着
+        latency.record(ns);              // <-- 新加：给 histogram
+        trades += result.size();
 
-            Order order{nextId++, side, symbol, qty, price,
-                        std::chrono::steady_clock::now()};
-            int myId = order.id;
-
-            auto t1 = std::chrono::steady_clock::now();
-            auto result = book.addOrder(order);
-            auto t2 = std::chrono::steady_clock::now();
-
-            double ns = std::chrono::duration<double, std::nano>(t2 - t1).count();
-            totalLatencyUs += ns / 1000.0;
-            latency.record(ns);
-            trades += result.size();
-
-            liveIds.push_back(myId);
-
-            if (sessionOpen) {
-                for (const auto& t : result) {
-                    session.recordTrade(t.symbol, t.price, t.quantity);
-                }
+        if (sessionOpen) {
+            for (const auto& t : result) {
+                session.recordTrade(t.symbol, t.price, t.quantity);
             }
         }
     }
@@ -115,17 +86,14 @@ void runSimulation(std::map<std::string, OrderBook>& books,
 
     std::cout << "\n=== Single-Thread Simulation ===\n"
               << "  Symbol:          " << symbol << "\n"
-              << "  Operations:      " << count << "\n"
-              << "  Adds:            " << (count - cancels) << "\n"
-              << "  Cancels:         " << cancels
-              << " (hits: " << cancelHits << ")\n"
+              << "  Orders:          " << count << "\n"
               << "  Trades:          " << trades << "\n"
               << "  Total time:      " << std::fixed << std::setprecision(2)
               << totalTimeMs << " ms\n"
-              << "  Avg latency:     " << totalLatencyUs / count << " us/op\n"
+              << "  Avg latency:     " << totalLatencyUs / count << " us/order\n"
               << "  Throughput:      " << std::setprecision(0)
-              << count / (totalTimeMs / 1000.0) << " ops/sec\n" << std::endl;
-    latency.report("Single-Thread Mixed (add+cancel) Latency");
+              << count / (totalTimeMs / 1000.0) << " orders/sec\n" << std::endl;
+    latency.report("Single-Thread addOrder Latency"); 
 }
 
 // ---- 多线程模拟 ----
