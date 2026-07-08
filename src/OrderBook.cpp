@@ -2,7 +2,7 @@
 
 std::vector<Trade> OrderBook::addOrder(Order& order) {
     std::vector<Trade> trades = match(order);
-    if (order.quantity > 0) {
+    if (order.quantity > 0 && order.type == OrderType::LIMIT) {
         if (order.side == Side::BUY) {
             auto& queue = bids[order.price];
             queue.push_back(order);
@@ -21,7 +21,7 @@ std::vector<Trade> OrderBook::match(Order& order) {
     if (order.side == Side::BUY) {
         while (order.quantity > 0 && !asks.empty()) {
             auto& [bestAskPrice, bestAskQueue] = *asks.begin();
-            if (bestAskPrice > order.price) break;
+            if (order.type == OrderType::LIMIT && bestAskPrice > order.price) break;
             Order& sellOrder = bestAskQueue.front();
             int fillQty = std::min(order.quantity, sellOrder.quantity);
             trades.push_back({order.id, sellOrder.id, order.symbol, fillQty, bestAskPrice});
@@ -36,7 +36,7 @@ std::vector<Trade> OrderBook::match(Order& order) {
     } else {
         while (order.quantity > 0 && !bids.empty()) {
             auto& [bestBidPrice, bestBidQueue] = *bids.begin();
-            if (bestBidPrice < order.price) break;
+            if (order.type == OrderType::LIMIT && bestBidPrice < order.price) break;
             Order& buyOrder = bestBidQueue.front();
             int fillQty = std::min(order.quantity, buyOrder.quantity);
             trades.push_back({buyOrder.id, order.id, order.symbol, fillQty, bestBidPrice});

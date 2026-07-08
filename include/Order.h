@@ -7,6 +7,11 @@ enum class Side {
     SELL
 };
 
+enum class OrderType {
+    LIMIT,
+    MARKET
+};
+
 struct Order {
     int id;
     Side side;
@@ -14,4 +19,5 @@ struct Order {
     int quantity;
     double price;
     std::chrono::steady_clock::time_point timestamp;
+    OrderType type = OrderType::LIMIT;
 };

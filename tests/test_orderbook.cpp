@@ -148,3 +148,106 @@ TEST(OrderBook, TradeAtPassivePrice) {
     // 成交价应该是挂单方（买方）的 146.00，不是卖方的 144.00
     EXPECT_DOUBLE_EQ(trades[0].price, 146.00);
 }
+
+TEST(OrderBook, MarketBuyNoLiquidityReturnsEmpty) {
+    OrderBook book;
+    Order marketBuy = makeOrder(Side::BUY, "AMD", 100, 0.0);
+    marketBuy.type = OrderType::MARKET;
+
+    auto trades = book.addOrder(marketBuy);
+
+    EXPECT_TRUE(trades.empty());
+    EXPECT_EQ(marketBuy.quantity, 100);
+
+    // IOC 未成交部分应被丢弃，不应挂在簿上
+    EXPECT_FALSE(book.cancelOrder(marketBuy.id));
+
+    Order sell = makeOrder(Side::SELL, "AMD", 10, 145.00);
+    auto followTrades = book.addOrder(sell);
+    EXPECT_TRUE(followTrades.empty());
+}
+
+TEST(OrderBook, MarketBuyPartialFillDropsRemainder) {
+    OrderBook book;
+
+    Order ask = makeOrder(Side::SELL, "AMD", 30, 145.00);
+    book.addOrder(ask);
+
+    Order marketBuy = makeOrder(Side::BUY, "AMD", 100, 0.0);
+    marketBuy.type = OrderType::MARKET;
+
+    auto trades = book.addOrder(marketBuy);
+
+    ASSERT_EQ(trades.size(), 1);
+    EXPECT_EQ(trades[0].quantity, 30);
+    EXPECT_EQ(marketBuy.quantity, 70);
+
+    // IOC 未成交部分应被丢弃，不应挂在簿上
+    EXPECT_FALSE(book.cancelOrder(marketBuy.id));
+
+    Order sell2 = makeOrder(Side::SELL, "AMD", 10, 144.00);
+    auto followTrades = book.addOrder(sell2);
+    EXPECT_TRUE(followTrades.empty());
+}
+
+TEST(OrderBook, MarketBuyFullFillWorksAndBookEmpty) {
+    OrderBook book;
+
+    Order ask = makeOrder(Side::SELL, "AMD", 30, 145.00);
+    book.addOrder(ask);
+
+    Order marketBuy = makeOrder(Side::BUY, "AMD", 30, 0.0);
+    marketBuy.type = OrderType::MARKET;
+
+    auto trades = book.addOrder(marketBuy);
+
+    ASSERT_EQ(trades.size(), 1);
+    EXPECT_EQ(trades[0].quantity, 30);
+    EXPECT_EQ(marketBuy.quantity, 0);
+
+    // 簿应为空：新卖单不会立即成交
+    Order sell2 = makeOrder(Side::SELL, "AMD", 10, 146.00);
+    auto followTrades = book.addOrder(sell2);
+    EXPECT_TRUE(followTrades.empty());
+}
+
+TEST(OrderBook, MarketOrderIgnoresPrice) {
+    OrderBook book;
+
+    Order ask1 = makeOrder(Side::SELL, "AMD", 10, 145.00);
+    Order ask2 = makeOrder(Side::SELL, "AMD", 10, 146.00);
+    Order ask3 = makeOrder(Side::SELL, "AMD", 10, 147.00);
+    book.addOrder(ask1);
+    book.addOrder(ask2);
+    book.addOrder(ask3);
+
+    Order marketBuy = makeOrder(Side::BUY, "AMD", 30, 1.0);
+    marketBuy.type = OrderType::MARKET;
+
+    auto trades = book.addOrder(marketBuy);
+
+    ASSERT_EQ(trades.size(), 3);
+    EXPECT_DOUBLE_EQ(trades[0].price, 145.00);
+    EXPECT_DOUBLE_EQ(trades[1].price, 146.00);
+    EXPECT_DOUBLE_EQ(trades[2].price, 147.00);
+    EXPECT_EQ(marketBuy.quantity, 0);
+}
+
+TEST(OrderBook, LimitOrderStillRestsAfterPartialFill) {
+    OrderBook book;
+
+    Order ask = makeOrder(Side::SELL, "AMD", 30, 145.00);
+    book.addOrder(ask);
+
+    Order limitBuy = makeOrder(Side::BUY, "AMD", 100, 145.00);
+    limitBuy.type = OrderType::LIMIT;
+
+    auto trades = book.addOrder(limitBuy);
+
+    ASSERT_EQ(trades.size(), 1);
+    EXPECT_EQ(trades[0].quantity, 30);
+    EXPECT_EQ(limitBuy.quantity, 70);
+
+    // LIMIT 剩余部分应继续挂单，可被取消
+    EXPECT_TRUE(book.cancelOrder(limitBuy.id));
+}

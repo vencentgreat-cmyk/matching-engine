@@ -299,3 +299,71 @@ TEST(ServerIntegration, ConcurrentBookResponsesAreCompleteAndIsolated) {
     EXPECT_NE(nvdaResp.find("BID 500.00 x 80"), std::string::npos);
     EXPECT_EQ(nvdaResp.find("AMD"), std::string::npos);
 }
+
+TEST(ServerIntegration, RejectsZeroQuantity) {
+    int port = pickFreePort();
+    ASSERT_GT(port, 0);
+
+    RunningServer server(port);
+
+    int fd = connectClient(port);
+    ASSERT_GE(fd, 0);
+
+    recvUntilQuiet(fd);
+
+    ASSERT_TRUE(sendLine(fd, "BUY AMD 0 145.00"));
+    std::string errResp = recvUntilQuiet(fd);
+    EXPECT_NE(errResp.find("[ERROR] Quantity must be positive"), std::string::npos);
+
+    ASSERT_TRUE(sendLine(fd, "BOOK AMD"));
+    std::string bookResp = recvUntilQuiet(fd);
+    EXPECT_NE(bookResp.find("No orders for AMD"), std::string::npos);
+
+    close(fd);
+}
+
+TEST(ServerIntegration, RejectsNegativePrice) {
+    int port = pickFreePort();
+    ASSERT_GT(port, 0);
+
+    RunningServer server(port);
+
+    int fd = connectClient(port);
+    ASSERT_GE(fd, 0);
+
+    recvUntilQuiet(fd);
+
+    ASSERT_TRUE(sendLine(fd, "BUY AMD 100 -1.00"));
+    std::string errResp = recvUntilQuiet(fd);
+    EXPECT_NE(errResp.find("[ERROR] Price must be positive for limit orders"), std::string::npos);
+
+    ASSERT_TRUE(sendLine(fd, "BOOK AMD"));
+    std::string bookResp = recvUntilQuiet(fd);
+    EXPECT_NE(bookResp.find("No orders for AMD"), std::string::npos);
+
+    close(fd);
+}
+
+TEST(ServerIntegration, RejectsMissingSymbol) {
+    int port = pickFreePort();
+    ASSERT_GT(port, 0);
+
+    RunningServer server(port);
+
+    int fd = connectClient(port);
+    ASSERT_GE(fd, 0);
+
+    recvUntilQuiet(fd);
+
+    ASSERT_TRUE(sendLine(fd, "BUY"));
+    std::string resp1 = recvUntilQuiet(fd);
+    EXPECT_TRUE(resp1.find("Usage: BUY <symbol> <qty> <price>") != std::string::npos
+        || resp1.find("[ERROR] Symbol required") != std::string::npos);
+
+    ASSERT_TRUE(sendLine(fd, "BUY 100 145.00"));
+    std::string resp2 = recvUntilQuiet(fd);
+    EXPECT_TRUE(resp2.find("Usage: BUY <symbol> <qty> <price>") != std::string::npos
+        || resp2.find("[ERROR]") != std::string::npos);
+
+    close(fd);
+}

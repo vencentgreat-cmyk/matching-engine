@@ -256,12 +256,21 @@ int main() {
                 continue;
             }
 
-            Side side = (side_str == "BUY") ? Side::BUY : Side::SELL;
-            // Market order: 买方出无穷大价，卖方要价为零
-            double price = (side == Side::BUY) ? 999999.99 : 0.01;
+            if (symbol.empty()) {
+                std::cout << "[ERROR] Symbol required" << std::endl;
+                continue;
+            }
 
-            Order order{nextId++, side, symbol, qty, price,
+            if (qty <= 0) {
+                std::cout << "[ERROR] Quantity must be positive" << std::endl;
+                continue;
+            }
+
+            Side side = (side_str == "BUY") ? Side::BUY : Side::SELL;
+
+            Order order{nextId++, side, symbol, qty, 0.0,
                         std::chrono::steady_clock::now()};
+            order.type = OrderType::MARKET;
 
             std::cout << "[MARKET ORDER] id=" << order.id << " "
                       << side_str << " " << qty << " " << symbol << std::endl;
@@ -279,8 +288,8 @@ int main() {
                 std::cout << "[WARNING] No liquidity — order book is empty for "
                           << symbol << std::endl;
             } else if (order.quantity > 0) {
-                std::cout << "[PARTIAL] " << order.quantity
-                          << " unfilled (not enough liquidity)" << std::endl;
+                std::cout << "[UNFILLED] " << order.quantity
+                          << " shares dropped (IOC)" << std::endl;
             }
 
         } else if (command == "BUY" || command == "SELL") {
@@ -295,9 +304,25 @@ int main() {
 
             for (auto& c : symbol) c = toupper(c);
 
+            if (symbol.empty()) {
+                std::cout << "[ERROR] Symbol required" << std::endl;
+                continue;
+            }
+
+            if (qty <= 0) {
+                std::cout << "[ERROR] Quantity must be positive" << std::endl;
+                continue;
+            }
+
+            if (price <= 0) {
+                std::cout << "[ERROR] Price must be positive for limit orders" << std::endl;
+                continue;
+            }
+
             Side side = (command == "BUY") ? Side::BUY : Side::SELL;
             Order order{nextId++, side, symbol, qty, price,
                         std::chrono::steady_clock::now()};
+            order.type = OrderType::LIMIT;
 
             std::cout << "[ORDER] id=" << order.id << " "
                       << command << " " << qty << " " << symbol

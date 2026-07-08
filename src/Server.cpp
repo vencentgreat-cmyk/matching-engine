@@ -154,9 +154,25 @@ std::string Server::processCommand(const std::string& line,
 
         for (auto& c : symbol) c = toupper(c);
 
+        if (symbol.empty()) {
+            out << "[ERROR] Symbol required\n";
+            return out.str();
+        }
+
+        if (qty <= 0) {
+            out << "[ERROR] Quantity must be positive\n";
+            return out.str();
+        }
+
+        if (price <= 0) {
+            out << "[ERROR] Price must be positive for limit orders\n";
+            return out.str();
+        }
+
         Side side = (command == "BUY") ? Side::BUY : Side::SELL;
         Order order{nextId_++, side, symbol, qty, price,
                     std::chrono::steady_clock::now()};
+        order.type = OrderType::LIMIT;
 
         out << "[ORDER] id=" << order.id << " " << command
             << " " << qty << " " << symbol
@@ -184,6 +200,66 @@ std::string Server::processCommand(const std::string& line,
 
         if (order.quantity > 0 && !trades.empty()) {
             out << "[PARTIAL] " << order.quantity << " remaining on book\n";
+        }
+
+    } else if (command == "MARKET") {
+        std::string sideStr;
+        std::string symbol;
+        int qty;
+
+        if (!(iss >> sideStr >> symbol >> qty)) {
+            out << "Usage: MARKET BUY/SELL <symbol> <qty>\n";
+            return out.str();
+        }
+
+        for (auto& c : sideStr) c = toupper(c);
+        for (auto& c : symbol) c = toupper(c);
+
+        if (sideStr != "BUY" && sideStr != "SELL") {
+            out << "Usage: MARKET BUY/SELL <symbol> <qty>\n";
+            return out.str();
+        }
+
+        if (symbol.empty()) {
+            out << "[ERROR] Symbol required\n";
+            return out.str();
+        }
+
+        if (qty <= 0) {
+            out << "[ERROR] Quantity must be positive\n";
+            return out.str();
+        }
+
+        Side side = (sideStr == "BUY") ? Side::BUY : Side::SELL;
+        Order order{nextId_++, side, symbol, qty, 0.0,
+                    std::chrono::steady_clock::now()};
+        order.type = OrderType::MARKET;
+
+        out << "[MARKET ORDER] id=" << order.id << " " << sideStr
+            << " " << qty << " " << symbol << "\n";
+
+        std::cout << "[" << clientName << "] MARKET " << sideStr
+                  << " " << qty << " " << symbol << std::endl;
+
+        std::vector<Trade> trades;
+        {
+            std::lock_guard<std::mutex> lock(booksMutex_);
+            trades = books_[symbol].addOrder(order);
+        }
+
+        for (const auto& t : trades) {
+            std::string tradeMsg = "[TRADE] " + std::to_string(t.quantity) + " " + t.symbol
+                + " @ " + std::to_string(t.price).substr(0, std::to_string(t.price).find('.') + 3)
+                + " | Buyer: Order#" + std::to_string(t.buyOrderId)
+                + " Seller: Order#" + std::to_string(t.sellOrderId) + "\n";
+            out << tradeMsg;
+            std::cout << "  " << tradeMsg;
+        }
+
+        if (trades.empty()) {
+            out << "[WARNING] No liquidity — order book is empty for " << symbol << "\n";
+        } else if (order.quantity > 0) {
+            out << "[UNFILLED] " << order.quantity << " shares dropped (IOC)\n";
         }
 
     } else if (command == "CANCEL") {
