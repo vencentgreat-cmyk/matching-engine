@@ -61,7 +61,9 @@ void runSimulation(std::map<std::string, OrderBook>& books,
 
     auto startAll = std::chrono::steady_clock::now();
     double totalLatencyUs = 0.0;
-    LatencyStats latency(count);
+    LatencyStats addLatency(count);
+    LatencyStats cancelHitLatency(count);
+    LatencyStats cancelMissLatency(count);
 
     for (int i = 0; i < count; ++i) {
         bool doCancel = (opDist(rng) < 25) && !liveIds.empty();
@@ -79,9 +81,13 @@ void runSimulation(std::map<std::string, OrderBook>& books,
 
             double ns = std::chrono::duration<double, std::nano>(t2 - t1).count();
             totalLatencyUs += ns / 1000.0;
-            latency.record(ns);
+            if (ok) {
+                cancelHitLatency.record(ns);
+                cancelHits++;
+            } else {
+                cancelMissLatency.record(ns);
+            }
             cancels++;
-            if (ok) cancelHits++;
         } else {
             Side side = sideDist(rng) == 0 ? Side::BUY : Side::SELL;
             double price = std::round(priceDist(rng) * 100.0) / 100.0;
@@ -97,7 +103,7 @@ void runSimulation(std::map<std::string, OrderBook>& books,
 
             double ns = std::chrono::duration<double, std::nano>(t2 - t1).count();
             totalLatencyUs += ns / 1000.0;
-            latency.record(ns);
+            addLatency.record(ns);
             trades += result.size();
 
             liveIds.push_back(myId);
@@ -125,7 +131,11 @@ void runSimulation(std::map<std::string, OrderBook>& books,
               << "  Avg latency:     " << totalLatencyUs / count << " us/op\n"
               << "  Throughput:      " << std::setprecision(0)
               << count / (totalTimeMs / 1000.0) << " ops/sec\n" << std::endl;
-    latency.report("Single-Thread Mixed (add+cancel) Latency");
+
+    std::cout << "=== Latency by op class ===" << std::endl;
+    addLatency.report("Add Latency");
+    cancelHitLatency.report("Cancel-Hit Latency");
+    cancelMissLatency.report("Cancel-Miss Latency");
 }
 
 // ---- 多线程模拟 ----

@@ -28,6 +28,18 @@ Realistic HFT-style traffic. Cancels dominate tail latency because they must loc
 
 **Result: 16× throughput, 62× p99, 23× p99.9 reduction on the same workload.** The 1M-operation test did not complete in several minutes on the old version; the new version finishes in ~1 second.
 
+### Split by operation class
+
+Same deterministic mixed workload lens (`SIM AMD 1000000`, seed 42), but latency is broken out by operation class rather than aggregated.
+
+| Op class | n | p50 | p99 | p99.9 |
+|---|---:|---:|---:|---:|
+| Add | 750,132 | 641 ns | 2,494 ns | 11,622 ns |
+| Cancel-hit | 54,510 | 1,233 ns | 3,076 ns | 13,815 ns |
+| Cancel-miss | 195,358 | 250 ns | 1,373 ns | 2,856 ns |
+
+Methodology details: [docs/methodology.md](docs/methodology.md)
+
 ## Features
 
 - **Price-time priority matching** — highest bid and lowest ask matched first; ties broken by arrival time (FIFO)
