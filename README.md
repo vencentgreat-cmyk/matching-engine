@@ -115,6 +115,14 @@ Multiple clients can trade against each other in real time. Each client gets an 
 cd build && ctest --output-on-failure
 ```
 
+Optional: run tests with ThreadSanitizer (useful for concurrency checks):
+
+```bash
+cmake -S . -B build-tsan -DENABLE_TSAN=ON
+cmake --build build-tsan
+cd build-tsan && ctest --output-on-failure
+```
+
 ## Project Structure
 
 ```

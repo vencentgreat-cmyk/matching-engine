@@ -5,6 +5,12 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <algorithm>
+#include "NetIO.h"
+#include <cerrno>
+
+namespace {
+constexpr size_t MAX_FRAME_SIZE = 4096;
+}
 
 Server::Server(int port) : port_(port) {}
 
@@ -91,8 +97,12 @@ void Server::handleClient(int clientFd, const std::string& clientName) {
             break;
         }
 
-        buffer[bytesRead] = '\0';
-        partial += buffer;
+        partial.append(buffer, bytesRead);
+
+        if (partial.size() > MAX_FRAME_SIZE && partial.find('\n') == std::string::npos) {
+            sendMsg(clientFd, "[ERROR] Frame too large (max 4096). Closing connection.\n");
+            break;
+        }
 
         // 按换行符拆分，处理每一行
         size_t pos;
@@ -108,15 +118,18 @@ void Server::handleClient(int clientFd, const std::string& clientName) {
             if (line.empty()) continue;
 
             std::string response = processCommand(line, clientName);
-            sendMsg(clientFd, response);
+            if (!sendMsg(clientFd, response)) {
+                break;
+            }
         }
     }
 
     close(clientFd);
 }
 
-void Server::sendMsg(int fd, const std::string& msg) {
-    send(fd, msg.c_str(), msg.size(), 0);
+bool Server::sendMsg(int fd, const std::string& msg) {
+    if (msg.empty()) return true;
+    return sendAll(fd, msg);
 }
 
 std::string Server::processCommand(const std::string& line,
@@ -197,30 +210,27 @@ std::string Server::processCommand(const std::string& line,
         std::string symbol;
         std::lock_guard<std::mutex> lock(booksMutex_);
 
-        // 把 order book 输出到字符串
         std::ostringstream bookOut;
-        auto oldBuf = std::cout.rdbuf(bookOut.rdbuf());
 
         if (iss >> symbol) {
             for (auto& c : symbol) c = toupper(c);
             if (books_.count(symbol)) {
-                std::cout << "\n--- " << symbol << " ---";
-                books_[symbol].print();
+                bookOut << "\n--- " << symbol << " ---";
+                books_[symbol].print(bookOut);
             } else {
-                std::cout << "No orders for " << symbol << "\n";
+                bookOut << "No orders for " << symbol << "\n";
             }
         } else {
             if (books_.empty()) {
-                std::cout << "Order book is empty.\n";
+                bookOut << "Order book is empty.\n";
             } else {
                 for (auto& [sym, book] : books_) {
-                    std::cout << "\n--- " << sym << " ---";
-                    book.print();
+                    bookOut << "\n--- " << sym << " ---";
+                    book.print(bookOut);
                 }
             }
         }
 
-        std::cout.rdbuf(oldBuf);
         out << bookOut.str();
 
     } else if (command == "HELP") {

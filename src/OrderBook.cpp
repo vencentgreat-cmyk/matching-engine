@@ -71,20 +71,24 @@ bool OrderBook::cancelOrder(int orderId) {
 }
 
 void OrderBook::print() const {
-    std::cout << "\n=== Order Book ===" << std::endl;
+    print(std::cout);
+}
+
+void OrderBook::print(std::ostream& out) const {
+    out << "\n=== Order Book ===" << std::endl;
     for (auto it = asks.rbegin(); it != asks.rend(); ++it) {
         int totalQty = 0;
         for (const auto& o : it->second) totalQty += o.quantity;
-        std::cout << "                     ASK "
-                  << std::fixed << std::setprecision(2)
-                  << it->first << " x " << totalQty << std::endl;
+        out << "                     ASK "
+            << std::fixed << std::setprecision(2)
+            << it->first << " x " << totalQty << std::endl;
     }
-    std::cout << "  --------------------" << std::endl;
+    out << "  --------------------" << std::endl;
     for (auto it = bids.begin(); it != bids.end(); ++it) {
         int totalQty = 0;
         for (const auto& o : it->second) totalQty += o.quantity;
-        std::cout << "  BID " << std::fixed << std::setprecision(2)
-                  << it->first << " x " << totalQty << std::endl;
+        out << "  BID " << std::fixed << std::setprecision(2)
+            << it->first << " x " << totalQty << std::endl;
     }
-    std::cout << std::endl;
+    out << std::endl;
 }

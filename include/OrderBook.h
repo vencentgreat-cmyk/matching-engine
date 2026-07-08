@@ -20,6 +20,7 @@ public:
     std::vector<Trade> addOrder(Order& order);
     bool cancelOrder(int orderId);
     void print() const;
+    void print(std::ostream& out) const;
 
 private:
     std::map<double, std::list<Order>, std::greater<double>> bids;

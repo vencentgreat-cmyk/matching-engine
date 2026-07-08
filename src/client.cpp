@@ -5,14 +5,21 @@
 #include <arpa/inet.h>
 #include <thread>
 #include <atomic>
+#include "NetIO.h"
+
+namespace {
+constexpr size_t MAX_FRAME_SIZE = 4096;
+}
 
 std::atomic<bool> running{true};
 
 // 单独线程：接收服务器消息并打印
 void receiveThread(int sockFd) {
     char buffer[4096];
+    std::string partial;
+
     while (running) {
-        int bytesRead = recv(sockFd, buffer, sizeof(buffer) - 1, 0);
+        int bytesRead = recv(sockFd, buffer, sizeof(buffer), 0);
         if (bytesRead <= 0) {
             if (running) {
                 std::cout << "\n[DISCONNECTED] Server closed connection." << std::endl;
@@ -20,9 +27,27 @@ void receiveThread(int sockFd) {
             running = false;
             break;
         }
-        buffer[bytesRead] = '\0';
-        std::cout << buffer;
-        std::cout << "> " << std::flush;
+
+        partial.append(buffer, bytesRead);
+
+        if (partial.size() > MAX_FRAME_SIZE && partial.find('\n') == std::string::npos) {
+            std::cout << "\n[ERROR] Server message too large (max 4096). Disconnecting." << std::endl;
+            running = false;
+            break;
+        }
+
+        size_t pos;
+        while ((pos = partial.find('\n')) != std::string::npos) {
+            std::string line = partial.substr(0, pos);
+            partial = partial.substr(pos + 1);
+
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+
+            std::cout << line << std::endl;
+            std::cout << "> " << std::flush;
+        }
     }
 }
 
@@ -68,7 +93,11 @@ int main(int argc, char* argv[]) {
         if (!running) break;
 
         line += "\n";
-        send(sockFd, line.c_str(), line.size(), 0);
+        if (!sendAll(sockFd, line)) {
+            std::cout << "[ERROR] Failed to send command to server." << std::endl;
+            running = false;
+            break;
+        }
 
         // 去掉换行符检查是否是 QUIT
         std::string cmd = line.substr(0, line.size() - 1);

@@ -36,7 +36,7 @@ private:
     void handleClient(int clientFd, const std::string& clientName);
 
     // 发送消息给客户端
-    void sendMsg(int fd, const std::string& msg);
+    bool sendMsg(int fd, const std::string& msg);
 
     // 处理一行命令，返回响应
     std::string processCommand(const std::string& line, const std::string& clientName);
