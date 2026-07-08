@@ -1,4 +1,6 @@
+# Build and test artifacts
 build/
-engine
-*.o
-.vscode/
+Testing/
+
+# Backup files
+*.bak
